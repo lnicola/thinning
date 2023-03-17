@@ -19,11 +19,6 @@ fn thinning_zs_iteration(
     h: usize,
     iter: i32,
 ) -> bool {
-    // let win_x = 0;
-    // let win_y = h / 2;
-    // let win_w = 5000;
-    // let win_h = 25000;
-
     let mut diff: bool = false;
     let min_x = if win_x == 0 { 1 } else { win_x };
     let max_x = if win_x + win_w == w {
@@ -84,7 +79,6 @@ fn thinning_zs_post(
     win_w: usize,
     win_h: usize,
     w: usize,
-    h: usize,
 ) {
     for i in win_y..win_y + win_h {
         for j in win_x..win_x + win_w {
@@ -98,16 +92,16 @@ fn thinning_zs_post(
 
 pub fn thinning_zs(im: &mut [u8], w: usize, h: usize) {
     let mut iter = 0;
-    let mut diff: bool = false;
+    let mut diff;
     loop {
         dbg!(iter);
         if dbg!(thinning_zs_iteration(im, 0, 0, w, h, w, h, 0)) {
-            thinning_zs_post(im, 0, 0, w, h, w, h);
+            thinning_zs_post(im, 0, 0, w, h, w);
             diff = dbg!(thinning_zs_iteration(im, 0, 0, w, h, w, h, 1));
         } else {
             diff = false;
         }
-        thinning_zs_post(im, 0, 0, w, h, w, h);
+        thinning_zs_post(im, 0, 0, w, h, w);
         if !diff {
             break;
         }
@@ -125,25 +119,6 @@ pub fn thinning_zs_tiled(im: &mut [u8], w: usize, h: usize) {
     loop {
         dbg!(iter);
         let mut diff: bool = false;
-        // for ti_y in 0..nty {
-        //     for ti_x in 0..ntx {
-        //         println!("{iter}: {:?}", (ti_x, ti_y));
-        //         let win_x = ti_x * tile_size_x;
-        //         let win_y = ti_y * tile_size_y;
-        //         let win_w = tile_size_x.min(w - win_x);
-        //         let win_h = tile_size_y.min(h - win_y);
-        //         println!("{:?}@{:?}", (win_x, win_y), (win_w, win_h));
-        //         if dbg!(thinning_zs_iteration(
-        //             im, win_x, win_y, win_w, win_h, w, h, 0
-        //         )) {
-        //             thinning_zs_post(im, 0, 0, w, h, w, h);
-        //             diff = true;
-        //             dbg!(thinning_zs_iteration(
-        //                 im, win_x, win_y, win_w, win_h, w, h, 1
-        //             ));
-        //         }
-        //     }
-        // }
 
         for ti_y in 0..nty {
             for ti_x in 0..ntx {
@@ -180,11 +155,11 @@ pub fn thinning_zs_tiled(im: &mut [u8], w: usize, h: usize) {
                 let win_y = ti_y * tile_size_y;
                 let win_w = tile_size_x.min(w - win_x);
                 let win_h = tile_size_y.min(h - win_y);
-                thinning_zs_post(im, win_x, win_y, win_w, win_h, w, h);
+                thinning_zs_post(im, win_x, win_y, win_w, win_h, w);
             }
         }
 
-        // thinning_zs_post(im, 0, 0, w, h, w, h);
+        // thinning_zs_post(im, 0, 0, w, h, w);
         diff = false;
         for ti_y in 0..nty {
             for ti_x in 0..ntx {
@@ -211,7 +186,7 @@ pub fn thinning_zs_tiled(im: &mut [u8], w: usize, h: usize) {
         if !diff {
             break;
         }
-        // thinning_zs_post(im, 0, 0, w, h, w, h);
+        // thinning_zs_post(im, 0, 0, w, h, w);
         for ti_y in 0..nty {
             for ti_x in 0..ntx {
                 if tile_done[ti_y * ntx + ti_x] {
@@ -221,7 +196,7 @@ pub fn thinning_zs_tiled(im: &mut [u8], w: usize, h: usize) {
                 let win_y = ti_y * tile_size_y;
                 let win_w = tile_size_x.min(w - win_x);
                 let win_h = tile_size_y.min(h - win_y);
-                thinning_zs_post(im, win_x, win_y, win_w, win_h, w, h);
+                thinning_zs_post(im, win_x, win_y, win_w, win_h, w);
             }
         }
         iter += 1;
