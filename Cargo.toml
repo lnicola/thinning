@@ -6,8 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-gdal = { version = "0.14.0", features = ["bindgen"] }
-gdal-sys = { version = "0.8.0", features = ["bindgen"] }
+gdal = { git = "https://github.com/georust/gdal", features = ["bindgen"] }
+gdal-sys = { git = "https://github.com/georust/gdal", features = ["bindgen"] }
 
 [profile.release]
 # overflow-checks = true
