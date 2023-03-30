@@ -1,7 +1,16 @@
-use std::{error::Error, ptr, slice};
+use std::{
+    error::Error,
+    fs::{File, OpenOptions},
+    io::{BufWriter, Write},
+    ptr, slice,
+};
 
 use gdal::{Dataset, DatasetOptions, GdalOpenFlags};
 use gdal_sys::GDALRWFlag::GF_Write;
+use indicatif::ProgressBar;
+use memmap2::{Mmap, MmapMut};
+
+mod skeleton;
 
 //================================
 // RASTER SKELETONIZATION
@@ -85,7 +94,9 @@ fn thinning_zs_post(
             let marker = im[i * w + j] >> 1;
             let old = im[i * w + j] & 1;
             let new = old & (!marker);
-            im[i * w + j] = new;
+            if new != old {
+                im[i * w + j] = new;
+            }
         }
     }
 }
@@ -109,103 +120,136 @@ pub fn thinning_zs(im: &mut [u8], w: usize, h: usize) {
     }
 }
 
-pub fn thinning_zs_tiled(im: &mut [u8], w: usize, h: usize) {
-    let tile_size_x = 256;
-    let tile_size_y = 256;
-    let ntx = (w + tile_size_x - 1) / tile_size_x;
-    let nty = (h + tile_size_y - 1) / tile_size_y;
-    let mut tile_done = vec![false; ntx * nty];
-    let mut iter = 0;
+pub fn thinning_zs_tiled(
+    im: &mut [u8],
+    width: usize,
+    height: usize,
+    tile_width: usize,
+    tile_height: usize,
+) {
+    let ntx = (width + tile_width - 1) / tile_width;
+    let nty = (height + tile_height - 1) / tile_height;
+    let total_tiles = ntx * nty;
+
+    const FLAG_CHANGED: u8 = 1;
+    let mut tile_flags = vec![FLAG_CHANGED; total_tiles];
+
+    let mut iter = 1;
     loop {
-        dbg!(iter);
+        let remaining_tiles = tile_flags.iter().filter(|&f| f & FLAG_CHANGED != 0).count();
+        let pb = ProgressBar::new(remaining_tiles as u64);
+        log::info!("Starting iteration {iter}, {remaining_tiles}/{total_tiles}");
+        log::info!("Starting thinning H");
         let mut diff: bool = false;
 
         for ti_y in 0..nty {
             for ti_x in 0..ntx {
-                if tile_done[ti_y * ntx + ti_x]
-                    && (ti_x == 0 || tile_done[ti_y * ntx + ti_x - 1])
-                    && (ti_y == 0 || tile_done[(ti_y - 1) * ntx + ti_x])
-                    && (ti_x == ntx - 1 || tile_done[ti_y * ntx + ti_x + 1])
-                    && (ti_y == nty - 1 || tile_done[(ti_y + 1) * ntx + ti_x])
+                if tile_flags[ti_y * ntx + ti_x] & FLAG_CHANGED == 0
+                    && (ti_x == 0 || tile_flags[ti_y * ntx + ti_x - 1] & FLAG_CHANGED == 0)
+                    && (ti_y == 0 || tile_flags[(ti_y - 1) * ntx + ti_x] & FLAG_CHANGED == 0)
+                    && (ti_x == ntx - 1 || tile_flags[ti_y * ntx + ti_x + 1] & FLAG_CHANGED == 0)
+                    && (ti_y == nty - 1 || tile_flags[(ti_y + 1) * ntx + ti_x] & FLAG_CHANGED == 0)
                 {
                     continue;
                 }
-                // println!("{iter}: {:?}", (ti_x, ti_y));
-                let win_x = ti_x * tile_size_x;
-                let win_y = ti_y * tile_size_y;
-                let win_w = tile_size_x.min(w - win_x);
-                let win_h = tile_size_y.min(h - win_y);
-                if thinning_zs_iteration(im, win_x, win_y, win_w, win_h, w, h, 0) {
+                let win_x = ti_x * tile_width;
+                let win_y = ti_y * tile_height;
+                let win_w = tile_width.min(width - win_x);
+                let win_h = tile_height.min(height - win_y);
+                if thinning_zs_iteration(im, win_x, win_y, win_w, win_h, width, height, 0) {
+                    tile_flags[ti_y * ntx + ti_x] |= FLAG_CHANGED;
                     diff = true;
                 } else {
-                    tile_done[ti_y * ntx + ti_x] = true;
+                    tile_flags[ti_y * ntx + ti_x] &= !FLAG_CHANGED;
                 }
+                pb.inc(1);
             }
         }
+        pb.finish();
 
         if !diff {
             break;
         }
+
+        let remaining_tiles = tile_flags.iter().filter(|&f| f & FLAG_CHANGED != 0).count();
+        let pb = ProgressBar::new(remaining_tiles as u64);
+        log::info!("Starting pixel removal H");
         for ti_y in 0..nty {
             for ti_x in 0..ntx {
-                if tile_done[ti_y * ntx + ti_x] {
+                if tile_flags[ti_y * ntx + ti_x] & FLAG_CHANGED == 0 {
                     continue;
                 }
-                let win_x = ti_x * tile_size_x;
-                let win_y = ti_y * tile_size_y;
-                let win_w = tile_size_x.min(w - win_x);
-                let win_h = tile_size_y.min(h - win_y);
-                thinning_zs_post(im, win_x, win_y, win_w, win_h, w);
+                let win_x = ti_x * tile_width;
+                let win_y = ti_y * tile_height;
+                let win_w = tile_width.min(width - win_x);
+                let win_h = tile_height.min(height - win_y);
+                thinning_zs_post(im, win_x, win_y, win_w, win_h, width);
+                pb.inc(1);
             }
         }
+        pb.finish();
 
+        let remaining_tiles = tile_flags.iter().filter(|&f| f & FLAG_CHANGED != 0).count();
+        let pb = ProgressBar::new(remaining_tiles as u64);
         // thinning_zs_post(im, 0, 0, w, h, w);
+        log::info!("Starting thinning V");
         diff = false;
         for ti_y in 0..nty {
             for ti_x in 0..ntx {
-                if tile_done[ti_y * ntx + ti_x]
-                    && (ti_x == 0 || tile_done[ti_y * ntx + ti_x - 1])
-                    && (ti_y == 0 || tile_done[(ti_y - 1) * ntx + ti_x])
-                    && (ti_x == ntx - 1 || tile_done[ti_y * ntx + ti_x + 1])
-                    && (ti_y == nty - 1 || tile_done[(ti_y + 1) * ntx + ti_x])
+                if tile_flags[ti_y * ntx + ti_x] & FLAG_CHANGED == 0
+                    && (ti_x == 0 || tile_flags[ti_y * ntx + ti_x - 1] & FLAG_CHANGED == 0)
+                    && (ti_y == 0 || tile_flags[(ti_y - 1) * ntx + ti_x] & FLAG_CHANGED == 0)
+                    && (ti_x == ntx - 1 || tile_flags[ti_y * ntx + ti_x + 1] & FLAG_CHANGED == 0)
+                    && (ti_y == nty - 1 || tile_flags[(ti_y + 1) * ntx + ti_x] & FLAG_CHANGED == 0)
                 {
                     continue;
                 }
-                let win_x = ti_x * tile_size_x;
-                let win_y = ti_y * tile_size_y;
-                let win_w = tile_size_x.min(w - win_x);
-                let win_h = tile_size_y.min(h - win_y);
-                if thinning_zs_iteration(im, win_x, win_y, win_w, win_h, w, h, 1) {
+                let win_x = ti_x * tile_width;
+                let win_y = ti_y * tile_height;
+                let win_w = tile_width.min(width - win_x);
+                let win_h = tile_height.min(height - win_y);
+                if thinning_zs_iteration(im, win_x, win_y, win_w, win_h, width, height, 1) {
+                    tile_flags[ti_y * ntx + ti_x] |= FLAG_CHANGED;
                     diff = true;
                 } else {
-                    tile_done[ti_y * ntx + ti_x] = true;
+                    tile_flags[ti_y * ntx + ti_x] &= !FLAG_CHANGED;
                 }
+                pb.inc(1);
             }
         }
+        pb.finish();
 
         if !diff {
             break;
         }
+
+        let remaining_tiles = tile_flags.iter().filter(|&f| f & FLAG_CHANGED != 0).count();
+        let pb = ProgressBar::new(remaining_tiles as u64);
+        log::info!("Starting pixel removal V");
         // thinning_zs_post(im, 0, 0, w, h, w);
         for ti_y in 0..nty {
             for ti_x in 0..ntx {
-                if tile_done[ti_y * ntx + ti_x] {
+                if tile_flags[ti_y * ntx + ti_x] & FLAG_CHANGED == 0 {
                     continue;
                 }
-                let win_x = ti_x * tile_size_x;
-                let win_y = ti_y * tile_size_y;
-                let win_w = tile_size_x.min(w - win_x);
-                let win_h = tile_size_y.min(h - win_y);
-                thinning_zs_post(im, win_x, win_y, win_w, win_h, w);
+                let win_x = ti_x * tile_width;
+                let win_y = ti_y * tile_height;
+                let win_w = tile_width.min(width - win_x);
+                let win_h = tile_height.min(height - win_y);
+                thinning_zs_post(im, win_x, win_y, win_w, win_h, width);
+                pb.inc(1);
             }
         }
+        pb.finish();
+
         iter += 1;
     }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let file = std::env::args().nth(1).unwrap();
     let mut ds = Dataset::open_ex(
-        "v.tif",
+        &file,
         DatasetOptions {
             open_flags: GdalOpenFlags::GDAL_OF_UPDATE,
             ..DatasetOptions::default()
@@ -223,8 +267,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             ptr::null::<i8>() as _,
         )
     };
-    dbg!(pixel_space);
-    dbg!(line_space);
     let (width, height) = band.size();
     assert_eq!(pixel_space, 1);
     assert_eq!(line_space, width as i64);
@@ -234,6 +276,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let data = unsafe { gdal_sys::CPLVirtualMemGetAddr(mem) } as *mut u8;
     let len = unsafe { gdal_sys::CPLVirtualMemGetSize(mem) };
     let im = unsafe { slice::from_raw_parts_mut(data, len) };
+
+    // let file = OpenOptions::new().read(true).write(true).open(&file)?;
+    // let mut im = unsafe { MmapMut::map_mut(&file)? };
+    // let im = im.as_mut();
+
+    env_logger::init();
+
     // for i in 0..height * width {
     //     if im[i as usize] > 128 {
     //         im[i as usize] = 1
@@ -242,7 +291,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     //     }
     // }
 
-    thinning_zs_tiled(im, width, height);
+    // let width = 535120;
+    // let height = 599280;
+
+    thinning_zs_tiled(im, width, height, tile_width, tile_height);
+
+    // let skeleton = skeleton::trace_skeleton(im, width, height, 0, 0, 100000, 100000, 10, 999);
+    // let mut out = BufWriter::new(File::create("skeleton.csv")?);
+    // for i in 0..skeleton.len() {
+    //     for j in 0..skeleton[i].len() {
+    //         write!(out, "{},{} ", skeleton[i][j][0], skeleton[i][j][1])?;
+    //     }
+    //     writeln!(out)?;
+    // }
 
     unsafe { gdal_sys::CPLVirtualMemFree(mem) };
 
