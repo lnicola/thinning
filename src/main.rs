@@ -72,9 +72,12 @@ fn thinning_zs_iteration(
             } else {
                 p2 * p6 * p8
             };
-            if a == 1 && (b >= 2 && b <= 6) && m1 == 0 && m2 == 0 && (p1 & 1) == 1 {
-                im[i * w + j] |= 2;
-                diff = true;
+            if a == 1 && (b >= 2 && b <= 6) && m1 == 0 && m2 == 0 {
+                // if p1 == 1 // BUG!
+                if im[i * w + j] & 2 == 0 {
+                    diff = true;
+                    im[i * w + j] |= 2;
+                }
             }
         }
     }
@@ -298,6 +301,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // let width = 535120;
     // let height = 599280;
 
+    // thinning_zs(im, width, height);
     thinning_zs_tiled(im, width, height, tile_width, tile_height);
 
     // let skeleton = skeleton::trace_skeleton(im, width, height, 0, 0, 100000, 100000, 10, 999);
