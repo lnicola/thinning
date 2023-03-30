@@ -8,6 +8,7 @@ use std::{
 use gdal::{Dataset, DatasetOptions, GdalOpenFlags};
 use gdal_sys::GDALRWFlag::GF_Write;
 use indicatif::ProgressBar;
+use log::LevelFilter;
 use memmap2::{Mmap, MmapMut};
 
 mod skeleton;
@@ -137,7 +138,7 @@ pub fn thinning_zs_tiled(
     let mut iter = 1;
     loop {
         let remaining_tiles = tile_flags.iter().filter(|&f| f & FLAG_CHANGED != 0).count();
-        let pb = ProgressBar::new(remaining_tiles as u64);
+        let pb = ProgressBar::new(remaining_tiles as u64).with_message("Starting thinning H");
         log::info!("Starting iteration {iter}, {remaining_tiles}/{total_tiles}");
         log::info!("Starting thinning H");
         let mut diff: bool = false;
@@ -172,7 +173,7 @@ pub fn thinning_zs_tiled(
         }
 
         let remaining_tiles = tile_flags.iter().filter(|&f| f & FLAG_CHANGED != 0).count();
-        let pb = ProgressBar::new(remaining_tiles as u64);
+        let pb = ProgressBar::new(remaining_tiles as u64).with_message("Starting pixel removal H");
         log::info!("Starting pixel removal H");
         for ti_y in 0..nty {
             for ti_x in 0..ntx {
@@ -190,7 +191,7 @@ pub fn thinning_zs_tiled(
         pb.finish();
 
         let remaining_tiles = tile_flags.iter().filter(|&f| f & FLAG_CHANGED != 0).count();
-        let pb = ProgressBar::new(remaining_tiles as u64);
+        let pb = ProgressBar::new(remaining_tiles as u64).with_message("Starting thinning V");
         // thinning_zs_post(im, 0, 0, w, h, w);
         log::info!("Starting thinning V");
         diff = false;
@@ -224,7 +225,7 @@ pub fn thinning_zs_tiled(
         }
 
         let remaining_tiles = tile_flags.iter().filter(|&f| f & FLAG_CHANGED != 0).count();
-        let pb = ProgressBar::new(remaining_tiles as u64);
+        let pb = ProgressBar::new(remaining_tiles as u64).with_message("Starting pixel removal V");
         log::info!("Starting pixel removal V");
         // thinning_zs_post(im, 0, 0, w, h, w);
         for ti_y in 0..nty {
@@ -281,7 +282,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     // let mut im = unsafe { MmapMut::map_mut(&file)? };
     // let im = im.as_mut();
 
-    env_logger::init();
+    let mut builder = env_logger::Builder::new();
+    builder.filter_level(log::LevelFilter::Info);
+    builder.parse_env("RUST_LOG");
+    builder.init();
 
     // for i in 0..height * width {
     //     if im[i as usize] > 128 {
