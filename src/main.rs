@@ -45,6 +45,10 @@ fn thinning_zs_iteration(
     for i in min_y..max_y {
         for j in min_x..max_x {
             let p1: u8 = im[i * w + j] & 1;
+            if p1 == 0 {
+                continue;
+            }
+
             let p2: u8 = im[(i - 1) * w + j] & 1;
             let p3: u8 = im[(i - 1) * w + j + 1] & 1;
             let p4: u8 = im[(i) * w + j + 1] & 1;
@@ -73,11 +77,8 @@ fn thinning_zs_iteration(
                 p2 * p6 * p8
             };
             if a == 1 && (b >= 2 && b <= 6) && m1 == 0 && m2 == 0 {
-                // if p1 == 1 // BUG!
-                if im[i * w + j] & 2 == 0 {
-                    diff = true;
-                    im[i * w + j] |= 2;
-                }
+                diff = true;
+                im[i * w + j] |= 2;
             }
         }
     }
@@ -107,16 +108,17 @@ fn thinning_zs_post(
 
 pub fn thinning_zs(im: &mut [u8], w: usize, h: usize) {
     let mut iter = 0;
-    let mut diff;
     loop {
         dbg!(iter);
+        let mut diff = false;
         if dbg!(thinning_zs_iteration(im, 0, 0, w, h, w, h, 0)) {
+            diff = true;
             thinning_zs_post(im, 0, 0, w, h, w);
-            diff = dbg!(thinning_zs_iteration(im, 0, 0, w, h, w, h, 1));
-        } else {
-            diff = false;
         }
-        thinning_zs_post(im, 0, 0, w, h, w);
+        if dbg!(thinning_zs_iteration(im, 0, 0, w, h, w, h, 1)) {
+            diff = true;
+            thinning_zs_post(im, 0, 0, w, h, w);
+        }
         if !diff {
             break;
         }
@@ -135,24 +137,29 @@ pub fn thinning_zs_tiled(
     let nty = (height + tile_height - 1) / tile_height;
     let total_tiles = ntx * nty;
 
-    const FLAG_CHANGED: u8 = 1;
-    let mut tile_flags = vec![FLAG_CHANGED; total_tiles];
+    const FLAG_NONE: u8 = 0;
+    const FLAG_DONE: u8 = 1;
+    const FLAG_CHANGED_H: u8 = 2;
+    const FLAG_CHANGED_V: u8 = 4;
+    let mut tile_flags = vec![FLAG_NONE; total_tiles];
 
     let mut iter = 1;
     loop {
-        let remaining_tiles = tile_flags.iter().filter(|&f| f & FLAG_CHANGED != 0).count();
+        let remaining_tiles = tile_flags.iter().filter(|&f| f & FLAG_DONE == 0).count();
+        if remaining_tiles == 0 {
+            break;
+        }
         let pb = ProgressBar::new(remaining_tiles as u64).with_message("Starting thinning H");
         log::info!("Starting iteration {iter}, {remaining_tiles}/{total_tiles}");
         log::info!("Starting thinning H");
-        let mut diff: bool = false;
 
         for ti_y in 0..nty {
             for ti_x in 0..ntx {
-                if tile_flags[ti_y * ntx + ti_x] & FLAG_CHANGED == 0
-                    && (ti_x == 0 || tile_flags[ti_y * ntx + ti_x - 1] & FLAG_CHANGED == 0)
-                    && (ti_y == 0 || tile_flags[(ti_y - 1) * ntx + ti_x] & FLAG_CHANGED == 0)
-                    && (ti_x == ntx - 1 || tile_flags[ti_y * ntx + ti_x + 1] & FLAG_CHANGED == 0)
-                    && (ti_y == nty - 1 || tile_flags[(ti_y + 1) * ntx + ti_x] & FLAG_CHANGED == 0)
+                if tile_flags[ti_y * ntx + ti_x] & FLAG_DONE != 0
+                    && (ti_x == 0 || tile_flags[ti_y * ntx + ti_x - 1] & FLAG_DONE != 0)
+                    && (ti_y == 0 || tile_flags[(ti_y - 1) * ntx + ti_x] & FLAG_DONE != 0)
+                    && (ti_x == ntx - 1 || tile_flags[ti_y * ntx + ti_x + 1] & FLAG_DONE != 0)
+                    && (ti_y == nty - 1 || tile_flags[(ti_y + 1) * ntx + ti_x] & FLAG_DONE != 0)
                 {
                     continue;
                 }
@@ -161,26 +168,24 @@ pub fn thinning_zs_tiled(
                 let win_w = tile_width.min(width - win_x);
                 let win_h = tile_height.min(height - win_y);
                 if thinning_zs_iteration(im, win_x, win_y, win_w, win_h, width, height, 0) {
-                    tile_flags[ti_y * ntx + ti_x] |= FLAG_CHANGED;
-                    diff = true;
+                    tile_flags[ti_y * ntx + ti_x] |= FLAG_CHANGED_H;
                 } else {
-                    tile_flags[ti_y * ntx + ti_x] &= !FLAG_CHANGED;
+                    tile_flags[ti_y * ntx + ti_x] &= !FLAG_CHANGED_H;
                 }
                 pb.inc(1);
             }
         }
         pb.finish();
 
-        if !diff {
-            break;
-        }
-
-        let remaining_tiles = tile_flags.iter().filter(|&f| f & FLAG_CHANGED != 0).count();
+        let remaining_tiles = tile_flags
+            .iter()
+            .filter(|&f| f & FLAG_CHANGED_H != 0)
+            .count();
         let pb = ProgressBar::new(remaining_tiles as u64).with_message("Starting pixel removal H");
         log::info!("Starting pixel removal H");
         for ti_y in 0..nty {
             for ti_x in 0..ntx {
-                if tile_flags[ti_y * ntx + ti_x] & FLAG_CHANGED == 0 {
+                if tile_flags[ti_y * ntx + ti_x] & FLAG_CHANGED_H == 0 {
                     continue;
                 }
                 let win_x = ti_x * tile_width;
@@ -193,18 +198,17 @@ pub fn thinning_zs_tiled(
         }
         pb.finish();
 
-        let remaining_tiles = tile_flags.iter().filter(|&f| f & FLAG_CHANGED != 0).count();
+        let remaining_tiles = tile_flags.iter().filter(|&f| f & FLAG_DONE == 0).count();
         let pb = ProgressBar::new(remaining_tiles as u64).with_message("Starting thinning V");
         // thinning_zs_post(im, 0, 0, w, h, w);
         log::info!("Starting thinning V");
-        diff = false;
         for ti_y in 0..nty {
             for ti_x in 0..ntx {
-                if tile_flags[ti_y * ntx + ti_x] & FLAG_CHANGED == 0
-                    && (ti_x == 0 || tile_flags[ti_y * ntx + ti_x - 1] & FLAG_CHANGED == 0)
-                    && (ti_y == 0 || tile_flags[(ti_y - 1) * ntx + ti_x] & FLAG_CHANGED == 0)
-                    && (ti_x == ntx - 1 || tile_flags[ti_y * ntx + ti_x + 1] & FLAG_CHANGED == 0)
-                    && (ti_y == nty - 1 || tile_flags[(ti_y + 1) * ntx + ti_x] & FLAG_CHANGED == 0)
+                if tile_flags[ti_y * ntx + ti_x] & FLAG_DONE != 0
+                    && (ti_x == 0 || tile_flags[ti_y * ntx + ti_x - 1] & FLAG_DONE != 0)
+                    && (ti_y == 0 || tile_flags[(ti_y - 1) * ntx + ti_x] & FLAG_DONE != 0)
+                    && (ti_x == ntx - 1 || tile_flags[ti_y * ntx + ti_x + 1] & FLAG_DONE != 0)
+                    && (ti_y == nty - 1 || tile_flags[(ti_y + 1) * ntx + ti_x] & FLAG_DONE != 0)
                 {
                     continue;
                 }
@@ -213,27 +217,31 @@ pub fn thinning_zs_tiled(
                 let win_w = tile_width.min(width - win_x);
                 let win_h = tile_height.min(height - win_y);
                 if thinning_zs_iteration(im, win_x, win_y, win_w, win_h, width, height, 1) {
-                    tile_flags[ti_y * ntx + ti_x] |= FLAG_CHANGED;
-                    diff = true;
+                    tile_flags[ti_y * ntx + ti_x] |= FLAG_CHANGED_V;
                 } else {
-                    tile_flags[ti_y * ntx + ti_x] &= !FLAG_CHANGED;
+                    tile_flags[ti_y * ntx + ti_x] &= !FLAG_CHANGED_V;
                 }
                 pb.inc(1);
             }
         }
         pb.finish();
 
-        if !diff {
-            break;
-        }
-
-        let remaining_tiles = tile_flags.iter().filter(|&f| f & FLAG_CHANGED != 0).count();
+        let remaining_tiles = tile_flags
+            .iter()
+            .filter(|&f| f & FLAG_CHANGED_V != 0)
+            .count();
         let pb = ProgressBar::new(remaining_tiles as u64).with_message("Starting pixel removal V");
         log::info!("Starting pixel removal V");
         // thinning_zs_post(im, 0, 0, w, h, w);
         for ti_y in 0..nty {
             for ti_x in 0..ntx {
-                if tile_flags[ti_y * ntx + ti_x] & FLAG_CHANGED == 0 {
+                if tile_flags[ti_y * ntx + ti_x] & FLAG_CHANGED_H == 0
+                    && tile_flags[ti_y * ntx + ti_x] & FLAG_CHANGED_V == 0
+                {
+                    tile_flags[ti_y * ntx + ti_x] |= FLAG_DONE;
+                    continue;
+                }
+                if tile_flags[ti_y * ntx + ti_x] & FLAG_CHANGED_V == 0 {
                     continue;
                 }
                 let win_x = ti_x * tile_width;
